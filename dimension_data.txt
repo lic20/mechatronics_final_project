@@ -1,0 +1,6 @@
+pink goal: 215 * 60 
+red goal: 25 * 61
+right top: 29 * 19
+right bottom: 30 * 102
+left bottom: 212 101
+left top: 210 * 16
