@@ -13,8 +13,11 @@ void setup() {
   if(!bno.begin())
   {
     /* There was a problem detecting the BNO055 ... check your connections */
-    Serial.print("Ooops, no BNO055 detected ... Check your wiring or I2C ADDR!");
+    Serial.println("Ooops, no BNO055 detected ... Check your wiring or I2C ADDR!");
     while(1);
+  }
+  else {
+    Serial.println("IMU enabled");
   }
   
   delay(1000);

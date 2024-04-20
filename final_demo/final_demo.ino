@@ -27,7 +27,9 @@ int puck_angle = 0;
 
 int pink_goal[2] = {210, 60};
 int red_goal[2] = {30, 60};
+int arena_middle[2] = {105, 60};
 int robot_loc[2] = {0, 0};
+int error[2] = {0,0};
 
 // PID constants
 // ---------------
@@ -45,9 +47,9 @@ unsigned long refreshRate = 50; // Refresh rate in milliseconds
 unsigned long lastTime = 0;
 
 double heading = 0.0;
-int forward_speed = 120;
+int forward_speed = 130;
 int direction = 0;
-double tolerance = 8.0;
+double tolerance = 7.0;
 int turning = 0;
 
 Pixy2 pixy;
@@ -61,6 +63,7 @@ void setup() {
   Serial1.begin(115200);
   Serial.begin(115200);
   pixy.init();
+  Serial.println("pixy initized");
 
   /* Initialise the imu sensor */
   if(!bno.begin())
@@ -69,12 +72,19 @@ void setup() {
     Serial.print("Ooops, no BNO055 detected ... Check your wiring or I2C ADDR!");
     while(1);
   }
-
+  Serial.println("IMU enabled");
   servo1.attach(servo_r);
   servo2.attach(servo_l);
   motors.enableDrivers();
+  Serial.println("Motors enabled");
   bno.setExtCrystalUse(true);
-  delay(1000);
+  Serial.println("imu initized");
+  servo1.write(140);
+  servo2.write(30);
+  delay(3000);
+  Serial.println("Starting....");
+
+
 }
 
 void loop() {
@@ -85,46 +95,143 @@ void loop() {
 
   // move_servo();
   // getBlock();
-
   track_puck();
-  delay(3000);
+  move_goal(0);
+  // bool stat = get_data();
+  // delay(1000);
   // while(true) {
   //   stop();
   // }
 }
 
+double errorMag(){
+  double d = sqrt(error[0]^2 + error[2]^2);
+  return d;
+}
+
+bool move_goal(int goal_id){
+  if (get_data()) {
+    delay(10);
+    compute_error(goal_id);
+    delay(10);
+    PID_move(heading,1);
+
+    get_data();
+    while (errorMag() > 5.0) {
+      PID_move(heading, 0);
+      get_data();
+    }
+    stop();
+  }
+  else {
+    Serial.println("Unable to get location data !!");
+    return false;
+  }
+}
+
+void compute_error(int goal_id) {
+  if (goal_id == 0) {
+    //pink goal
+    int delta_x = abs(robot_loc[0]-pink_goal[0]);
+    int delta_y = abs(robot_loc[1]-pink_goal[1]);
+    double theta = abs(tan(delta_y/delta_x));
+
+    if (robot_loc[1] < 60) {
+      theta = -theta;
+    }
+    heading = 0.0 + theta;
+    anglerange();
+    error[0] = delta_x; error[1] = delta_y;
+  }
+  else if (goal_id == 1){
+    //red goal
+    int delta_x = abs(robot_loc[0]-red_goal[0]);
+    int delta_y = abs(robot_loc[1]-red_goal[1]);
+    double theta = abs(tan(delta_y/delta_x));
+
+    if (robot_loc[1] > 60) {
+      theta = -theta;
+    }
+    heading = 180.0 + theta;
+    anglerange();
+    error[0] = delta_x; error[1] = delta_y;
+  }
+  else if (goal_id == 2){
+    //middle
+    int delta_x = abs(robot_loc[0]-arena_middle[0]);
+    int delta_y = abs(robot_loc[1]-arena_middle[1]);
+    double theta = tan(delta_y/delta_x);
+    
+    if (robot_loc[0] >= arena_middle[0]) { //robot on the pink goal half of the arena
+      if (robot_loc[1] > 60) {
+        theta = -theta;
+      }
+      heading = 180.0 + theta;
+    }
+    else { //robot on the red goal half of the arena
+      if (robot_loc[1] < 60) {
+        theta = -theta;
+      }
+      heading = 0.0 + theta;
+    }
+    anglerange();
+    error[0] = delta_x; error[1] = delta_y;
+  }
+}
 
 bool find_puck() {
+  Serial.println("Find puck start");
   double current_heading = read_imu();
   int M1 = 80;
   int M2 = -80;
   unsigned long start = millis();
   motors.setM1Speed(M1);
   motors.setM2Speed(M2);
+  Serial.println("Robot starts turning");
 
   bool found = false;
   while(true) {
     int index = getBlock();
 
     if (index >= 0) {
+      stop();
       found = true;
       break;
     }
-    if (start - millis() > 5000) {
+    if (millis()-start > 5000) {
       break;
     }
   }
   stop();
+  Serial.println("Finished finding puck");
   return found;
 }
 
 void track_puck(){
-  find_puck();
+  bool found = find_puck();
+  if (!found) {
+    //move to the middle of the arena and try again
+    move_goal(2);
+    found = find_puck();
+    if (!found) {
+      Serial.println("No puck is found");
+      return;
+    }
+  }
   delay(10);
-  heading = heading + turning;
+  heading = read_imu() + turning;
   anglerange();
   delay(10);
   PID_move(heading, 1);
+  stop();
+  heading = read_imu();
+  delay(10);
+  double distance = 0;
+  distance = measureDistance();
+  while (distance > 5.0) {
+    PID_move(heading,0);
+    distance = measureDistance();
+  }
   stop();
 }
 
@@ -177,61 +284,64 @@ int getBlock()
   puck_area = pixy.ccc.blocks[max_type].m_width * pixy.ccc.blocks[max_type].m_height;
   puck_angle = turning;
   int color = pixy.ccc.blocks[max_type].m_signature;
-  Serial.println("Detected signature: " + String(color) + ", " + String(max_type));
+  Serial.println("Detected signature: " + String(color) + ", " + String(max_type) + ", turning: " + String(turning));
+
   return max_type;
 }
 
-int get_data() {
+bool get_data() {
   // send data to XBee
-  // char req = '?';
-  Serial1.println("?");
-  //get data from XBee
-  Serial.println("requested data, now getting data...");
-  String input;
+  String input = "";
   input.reserve(200);
-  int count = 0;
+  Serial1.println("?");
+  // Serial.println("requested data, now getting data...");
+  //get data from XBee
   while (Serial1.available()) {
     char in = Serial1.read();
-    if (String(in) == ",") {
-      if (count == 0) {
-        Serial.println(input);
-        if (String(input) == "0" || String(input) == "?") {
-          Serial.println("No match or data is invalid!!");
-          return -1;
-        }
-      }
-      else if (count == 1) {
-        Serial.println("Time: " + input);
-      }
-      else if (count == 2) {
-        if (String(input) == "---") {
-          Serial.println("Data is invalid!!");
-          return -1;
-        }
-        Serial.println("X loc: " + String(input));
-        robot_loc[0] = input.toInt();
-      }
-      count ++;
-      input = "";
-    }
-    else {  
       input += in;
+  }
+  Serial.println(input);
+  char input_char[input.length()+1];
+  input.toCharArray(input_char, sizeof(input_char));
+  char *token = strtok(input_char, ",");
+  int count = 1;
+  String mode = String(token);
+  if (mode != "1") {
+    Serial.println("Game is not started.");
+    return false;
+  }
+  while (count <= 4 && token != NULL) {
+    token = strtok(NULL, ",");
+    count ++;
+    if (count == 3) {
+      if (String(token) == "---") {
+        Serial.println("Robot tag not recognized.");
+        return false;
+      }
+      else {
+        // Serial.println("x: " + String(token));
+        robot_loc[0] = atoi(token);
+      }
+    }
+    else if (count == 4) {
+      if (String(token) == "---") {
+        Serial.println("Robot tag not recognized.");
+        return false;
+      }
+      else {
+        // Serial.println("y: " + String(token));
+        robot_loc[1] = atoi(token);
+      }
     }
   }
-  if (input != "") {
-    Serial.println("Y loc: " + String(input));
-    robot_loc[1] = input.toInt();
-  }
-  return 0;
+  return true;
 }
 
 void move_servo() {
   Serial.println("Moving servo.....");
-  int init_pos = 10;
-  int final_pos = 90;
   servo1.write(60);
   servo2.write(115);
-  delay(2000);
+  delay(500);
   servo1.write(140);
   servo2.write(30);
   Serial.println("Move complete.....");
@@ -341,15 +451,6 @@ void PID_move(double desired_angle, int mode){
       }
       Serial.println("Desired angle: " + String(desired_angle) + ", Current angle: " + String(current_angle));
       Serial.println("PID offset: " + String(offset));
-      // if (first_turn) {
-      //   if (direction == 0){
-      //     move_left(offset);
-      //   }
-      //   else if (direction == 1) {
-      //     move_right(offset);
-      //   }
-      //   first_turn = false;
-      // }
       int direction = 0;
       if (abs(desired_angle-360.0) < 0.01 || abs(desired_angle-0.0) < 0.01){
         if (current_angle <= 180.0) {
