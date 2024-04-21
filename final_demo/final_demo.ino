@@ -23,7 +23,7 @@
 #define servo_l 23
 
 int puck_area = 0;
-int puck_angle = 0;
+double puck_angle = 0;
 
 int pink_goal[2] = {210, 60};
 int red_goal[2] = {30, 60};
@@ -47,10 +47,9 @@ unsigned long refreshRate = 50; // Refresh rate in milliseconds
 unsigned long lastTime = 0;
 
 double heading = 0.0;
-int forward_speed = 130;
+int forward_speed = 110;
 int direction = 0;
-double tolerance = 7.0;
-int turning = 0;
+double tolerance = 8.0;
 
 Pixy2 pixy;
 DualMAX14870MotorShield motors;
@@ -95,8 +94,18 @@ void loop() {
 
   // move_servo();
   // getBlock();
-  track_puck();
-  move_goal(0);
+  // int result = track_puck();
+  // while (!result) {
+  //   result = track_puck();
+  // };
+  // delay(100);
+  // PID_move(18.0, 0);
+  int result = move_goal(0);
+  while (!result) {
+    result = move_goal(0);
+  };
+  move_servo();
+
   // bool stat = get_data();
   // delay(1000);
   // while(true) {
@@ -105,37 +114,50 @@ void loop() {
 }
 
 double errorMag(){
-  double d = sqrt(error[0]^2 + error[2]^2);
+  double d = sqrt(error[0]^2 + error[1]^2);
+  Serial.println("Error distance: " + String(d));
   return d;
 }
 
 bool move_goal(int goal_id){
   if (get_data()) {
-    delay(10);
+    delay(5);
     compute_error(goal_id);
-    delay(10);
+    Serial.println("Heading to the goal: " + String(heading));
+    delay(5);
+    Serial.println("Heading: " + String(heading));
     PID_move(heading,1);
 
+    double current_heading = heading;
     get_data();
-    while (errorMag() > 5.0) {
-      PID_move(heading, 0);
+    double e = errorMag();
+    while (e > 5.0) {
+      Serial.println("Error to goal: " + String(e));
+      PID_move(current_heading, 0);
       get_data();
+      compute_error(goal_id);
+      e = errorMag();
+      delay(100);
     }
+    heading = current_heading;
     stop();
   }
   else {
     Serial.println("Unable to get location data !!");
+    stop();
     return false;
   }
+  return true;
 }
 
 void compute_error(int goal_id) {
+  double theta;
   if (goal_id == 0) {
     //pink goal
     int delta_x = abs(robot_loc[0]-pink_goal[0]);
     int delta_y = abs(robot_loc[1]-pink_goal[1]);
-    double theta = abs(tan(delta_y/delta_x));
-
+    theta = atan2(delta_y,delta_x)*(180/M_PI);
+    Serial.println("Delta x: " + String(delta_x) + ", Delta y: " + String(delta_y) + ", theta = " + String(theta));
     if (robot_loc[1] < 60) {
       theta = -theta;
     }
@@ -147,7 +169,7 @@ void compute_error(int goal_id) {
     //red goal
     int delta_x = abs(robot_loc[0]-red_goal[0]);
     int delta_y = abs(robot_loc[1]-red_goal[1]);
-    double theta = abs(tan(delta_y/delta_x));
+    theta = atan2(delta_y,delta_x)*(180/M_PI);
 
     if (robot_loc[1] > 60) {
       theta = -theta;
@@ -160,7 +182,7 @@ void compute_error(int goal_id) {
     //middle
     int delta_x = abs(robot_loc[0]-arena_middle[0]);
     int delta_y = abs(robot_loc[1]-arena_middle[1]);
-    double theta = tan(delta_y/delta_x);
+    theta = atan2(delta_y,delta_x)*(180/M_PI);
     
     if (robot_loc[0] >= arena_middle[0]) { //robot on the pink goal half of the arena
       if (robot_loc[1] > 60) {
@@ -207,19 +229,20 @@ bool find_puck() {
   return found;
 }
 
-void track_puck(){
+bool track_puck(){
   bool found = find_puck();
   if (!found) {
     //move to the middle of the arena and try again
+    Serial.println("move to middle");
     move_goal(2);
     found = find_puck();
     if (!found) {
       Serial.println("No puck is found");
-      return;
+      return false;
     }
   }
   delay(10);
-  heading = read_imu() + turning;
+  heading = read_imu() + puck_angle;
   anglerange();
   delay(10);
   PID_move(heading, 1);
@@ -231,8 +254,14 @@ void track_puck(){
   while (distance > 5.0) {
     PID_move(heading,0);
     distance = measureDistance();
+    int index = getBlock();
+    if (index == -1) {
+      stop();
+      return false;
+    }
   }
   stop();
+  return true;
 }
 
 int getBlock()
@@ -248,12 +277,6 @@ int getBlock()
 
   int x_center = 158;
   int y_center = 104;
-  // if (markers_num == 1) {
-  //   int x = pixy.ccc.blocks[0].m_x;
-  //   puck_angle = int((float)(x_center-x)/5.2667);
-  //   puck_area = pixy.ccc.blocks[0].m_width * pixy.ccc.blocks[0].m_height;
-  //   return 0;
-  // }
 
   int max_area = 0;
   int max_type = -1;
@@ -276,15 +299,14 @@ int getBlock()
       max_area = area;
       max_type = i;
       //negative: turn left, positive: turn right
-      turning = int((float)x_offset/5.2667);
-      Serial.println(String(turning));
+      puck_angle = int((float)x_offset/5.2667);
+      // Serial.println(String(turning));
     }
   }
 
   puck_area = pixy.ccc.blocks[max_type].m_width * pixy.ccc.blocks[max_type].m_height;
-  puck_angle = turning;
   int color = pixy.ccc.blocks[max_type].m_signature;
-  Serial.println("Detected signature: " + String(color) + ", " + String(max_type) + ", turning: " + String(turning));
+  Serial.println("Detected signature: " + String(color) + ", " + String(max_type) + ", turning: " + String(puck_angle));
 
   return max_type;
 }
@@ -541,7 +563,7 @@ int speedrange(int n, int mode){
   int val = n;
   int max_val = 80;
   if (mode == 0) {
-    max_val = 200;
+    max_val = 130;
   }
   if (n > max_val){
     val = max_val;
@@ -576,7 +598,7 @@ void setPID(int motion) {
   }
   else if (motion == 1) // turning
   {
-    Kp = 6.85; Ki = 0.0; Kd = 0.68;
+    Kp = 6.85; Ki = 0.0; Kd = 0.7;
     // int pot1_val = analogRead(pot1);
     // int pot2_val = analogRead(pot2);
     // int pot3_val = analogRead(pot3);
