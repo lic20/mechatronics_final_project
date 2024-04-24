@@ -22,6 +22,10 @@
 #define servo_r 22
 #define servo_l 23
 
+#define switch_pin 2
+#define goal_led 52
+
+int goalState;
 int puck_area = 0;
 double puck_angle = 0;
 
@@ -47,7 +51,9 @@ unsigned long refreshRate = 50; // Refresh rate in milliseconds
 unsigned long lastTime = 0;
 
 double heading = 0.0;
-int forward_speed = 110;
+int forward_speed = 130;
+int linear_max = 150;
+int angular_max = 80;
 int direction = 0;
 double tolerance = 8.0;
 
@@ -63,6 +69,21 @@ void setup() {
   Serial.begin(115200);
   pixy.init();
   Serial.println("pixy initized");
+
+  pinMode(switch_pin, INPUT);
+  pinMode(goal_led, OUTPUT);
+  // attachInterrupt(digitalPinToInterrupt(switch_pin), read_switch_state, CHANGE);
+  goalState = digitalRead(switch_pin); 
+  delay(500);
+  if (goalState ==  LOW)
+  {
+    digitalWrite(goal_led, LOW);
+  } 
+  else
+  {
+    digitalWrite(goal_led, HIGH);
+  }   
+  Serial.println("Goal State: " + String(goalState));
 
   /* Initialise the imu sensor */
   if(!bno.begin())
@@ -82,8 +103,7 @@ void setup() {
   servo2.write(30);
   delay(3000);
   Serial.println("Starting....");
-
-
+  Serial.println("New code uploaded....");
 }
 
 void loop() {
@@ -94,50 +114,80 @@ void loop() {
 
   // move_servo();
   // getBlock();
+
   // int result = track_puck();
   // while (!result) {
   //   result = track_puck();
   // };
-  // delay(100);
-  // PID_move(18.0, 0);
-  int result = move_goal(0);
+  // delay(2000);
+  int result = move_goal(goalState);
   while (!result) {
-    result = move_goal(0);
+    result = move_goal(goalState);
   };
-  move_servo();
+  shot(goalState); 
+
 
   // bool stat = get_data();
-  // delay(1000);
+  delay(5000);
   // while(true) {
   //   stop();
   // }
 }
 
-double errorMag(){
-  double d = sqrt(error[0]^2 + error[1]^2);
-  Serial.println("Error distance: " + String(d));
-  return d;
+void shot(int goal_id) {
+  if (goal_id == 0) {
+    PID_move(0.0, 1);
+    move_servo();
+  }
+  else if (goal_id == 1) {
+    PID_move(180.0,1);
+    move_servo();
+  }
 }
+
+double errorMag(){
+  double d = sqrt(pow(error[0],2) + pow(error[1],2));
+  Serial.println("Error x: " + String(error[0]) + ", y: " + String(error[1]));
+  return abs(error[0]);
+}
+
+// void read_switch_state() {
+//   goalState = digitalRead(switch_pin);
+// }
 
 bool move_goal(int goal_id){
   if (get_data()) {
     delay(5);
-    compute_error(goal_id);
-    Serial.println("Heading to the goal: " + String(heading));
+   
+   
     delay(5);
     Serial.println("Heading: " + String(heading));
     PID_move(heading,1);
 
     double current_heading = heading;
-    get_data();
-    double e = errorMag();
-    while (e > 5.0) {
-      Serial.println("Error to goal: " + String(e));
+    bool valid = get_data();
+    compute_error(goal_id);
+    double e_x = errorMag();
+    if (!valid) {
+      e_x = 50;
+    }
+    while (e_x > 5.0) {
+      Serial.println("Error to goal: " + String(e_x));
+      if (getBlock() == -1) {
+        stop();
+        bool track = track_puck();
+        while (!track) {
+          track = track_puck();
+        }
+        return false;
+      }
       PID_move(current_heading, 0);
-      get_data();
+      if (!get_data()) {
+        continue;
+      }
       compute_error(goal_id);
-      e = errorMag();
-      delay(100);
+      delay(10);
+      e_x = errorMag();
     }
     heading = current_heading;
     stop();
@@ -161,7 +211,7 @@ void compute_error(int goal_id) {
     if (robot_loc[1] < 60) {
       theta = -theta;
     }
-    heading = 0.0 + theta;
+    heading = 0.0 + theta*0.8;
     anglerange();
     error[0] = delta_x; error[1] = delta_y;
   }
@@ -174,7 +224,7 @@ void compute_error(int goal_id) {
     if (robot_loc[1] > 60) {
       theta = -theta;
     }
-    heading = 180.0 + theta;
+    heading = 180.0 + theta*0.8;
     anglerange();
     error[0] = delta_x; error[1] = delta_y;
   }
@@ -188,7 +238,7 @@ void compute_error(int goal_id) {
       if (robot_loc[1] > 60) {
         theta = -theta;
       }
-      heading = 180.0 + theta;
+      heading = 180.0 + theta*0.8;
     }
     else { //robot on the red goal half of the arena
       if (robot_loc[1] < 60) {
@@ -251,16 +301,28 @@ bool track_puck(){
   delay(10);
   double distance = 0;
   distance = measureDistance();
+  PID_move(heading,0);
   while (distance > 5.0) {
+    if (distance < 17.0) {
+      forward_speed = 65;
+    }
     PID_move(heading,0);
-    distance = measureDistance();
     int index = getBlock();
     if (index == -1) {
       stop();
+      forward_speed = linear_max;
       return false;
     }
+    delay(50);
+    distance = measureDistance();
   }
   stop();
+  unsigned long tic = millis();
+  while ((millis() - tic) < 300) {
+    PID_move(heading, 0);
+  }
+  stop();
+  forward_speed = linear_max;
   return true;
 }
 
@@ -332,7 +394,7 @@ bool get_data() {
     Serial.println("Game is not started.");
     return false;
   }
-  while (count <= 4 && token != NULL) {
+  while (token != NULL) {
     token = strtok(NULL, ",");
     count ++;
     if (count == 3) {
@@ -355,6 +417,10 @@ bool get_data() {
         robot_loc[1] = atoi(token);
       }
     }
+  }
+  Serial.println(count);
+  if (count != 5) {
+    return false;
   }
   return true;
 }
@@ -561,9 +627,9 @@ double shortest_angle(double an1, double an2)
 
 int speedrange(int n, int mode){
   int val = n;
-  int max_val = 80;
+  int max_val = angular_max;
   if (mode == 0) {
-    max_val = 130;
+    max_val = linear_max;
   }
   if (n > max_val){
     val = max_val;
@@ -586,7 +652,7 @@ void anglerange() {
 void setPID(int motion) {
   if (motion == 0) //forward straight
   {
-    Kp = 4.54; Ki = 0.0; Kd = 0.12;
+    Kp = 4.5; Ki = 0.0; Kd = 0.12;
     //read potentiometer values
     // int pot1_val = analogRead(pot1);
     // int pot2_val = analogRead(pot2);
