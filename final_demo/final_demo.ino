@@ -51,9 +51,9 @@ unsigned long refreshRate = 50; // Refresh rate in milliseconds
 unsigned long lastTime = 0;
 
 double heading = 0.0;
-int forward_speed = 130;
+int forward_speed = 120;
 int linear_max = 150;
-int angular_max = 80;
+int angular_max = 90;
 int direction = 0;
 double tolerance = 8.0;
 
@@ -107,31 +107,19 @@ void setup() {
 }
 
 void loop() {
-  // int index = getBlock();
-  // read_servo(servo_r);
-  // read_servo(servo_l);
-  // measureDistance();
-
-  // move_servo();
-  // getBlock();
-
-  // int result = track_puck();
-  // while (!result) {
-  //   result = track_puck();
-  // };
-  // delay(2000);
-  int result = move_goal(goalState);
+  int result = track_puck();
+  while (!result) {
+    result = track_puck();
+  };
+  delay(2000);
+  result = move_goal(goalState);
   while (!result) {
     result = move_goal(goalState);
   };
-  shot(goalState); 
+  track_puck();
+  shot(goalState);
 
-
-  // bool stat = get_data();
   delay(5000);
-  // while(true) {
-  //   stop();
-  // }
 }
 
 void shot(int goal_id) {
@@ -155,18 +143,79 @@ double errorMag(){
 //   goalState = digitalRead(switch_pin);
 // }
 
+void move_back() {
+  motors.setM1Speed(-90);
+  motors.setM2Speed(-90);
+  unsigned long tic = millis();
+  while (millis() - tic < 1000) {
+    Serial.println("Moving back ....");
+  }
+  stop();
+}
+
+bool move_behind(int goal_id) {
+  double current_angle = read_imu();
+  if (goal_id == 0){
+    //pink
+    if (current_angle > 90.0 && current_angle < 270.0) {
+      move_back();
+      delay(100);
+      double angle = 90.0;
+      if (robot_loc[1] < 60) {
+        angle = 270.0;
+      }
+      PID_move(angle,1);
+      unsigned long start = millis();
+      while (millis()-start < 1200) {
+        PID_move(angle,0);
+      }
+      stop();
+      PID_move(180.0,1);
+      start = millis();
+      while (millis()-start < 1600) {
+        PID_move(180.0,0);
+      }
+      stop();
+      return true;
+    }
+    
+  }
+  else if (goal_id == 1) {
+    //red
+    if (current_angle <= 90.0 || current_angle >= 270.0){
+      move_back();
+      delay(100);
+      double angle = 90.0;
+      if (robot_loc[1] < 60) {
+        angle = 270.0;
+      }
+      PID_move(angle,1);
+      unsigned long start = millis();
+      while (millis()-start < 1200) {
+        PID_move(angle,0);
+      }
+      stop();
+      PID_move(0.0,1);
+      start = millis();
+      while (millis()-start < 1600) {
+        PID_move(0.0,0);
+      }
+      stop();
+      return true;
+    }
+  }
+  return false;
+}
+
 bool move_goal(int goal_id){
   if (get_data()) {
-    delay(5);
-   
-   
-    delay(5);
-    Serial.println("Heading: " + String(heading));
-    PID_move(heading,1);
-
-    double current_heading = heading;
     bool valid = get_data();
     compute_error(goal_id);
+    Serial.println("Heading: " + String(heading));
+    angular_max = 80;
+    PID_move(heading,1);
+    angular_max = 90;
+    double current_heading = heading;
     double e_x = errorMag();
     if (!valid) {
       e_x = 50;
@@ -283,13 +332,13 @@ bool track_puck(){
   bool found = find_puck();
   if (!found) {
     //move to the middle of the arena and try again
-    Serial.println("move to middle");
-    move_goal(2);
-    found = find_puck();
-    if (!found) {
-      Serial.println("No puck is found");
-      return false;
-    }
+    // Serial.println("move to middle");
+    // move_goal(2);
+    // found = find_puck();
+    // if (!found) {
+    // }
+    Serial.println("No puck is found");
+    return false;
   }
   delay(10);
   heading = read_imu() + puck_angle;
@@ -310,19 +359,28 @@ bool track_puck(){
     int index = getBlock();
     if (index == -1) {
       stop();
-      forward_speed = linear_max;
+      forward_speed = 120;
       return false;
     }
     delay(50);
     distance = measureDistance();
   }
   stop();
+  bool valid = get_data();
+  while (!valid) {
+    valid = get_data();
+  }
+  forward_speed = 120;
+  if (move_behind(goalState)) {
+    return false;
+  }
   unsigned long tic = millis();
-  while ((millis() - tic) < 300) {
+  forward_speed = 65;
+  while ((millis() - tic) < 400) {
     PID_move(heading, 0);
   }
   stop();
-  forward_speed = linear_max;
+  forward_speed = 120;
   return true;
 }
 
@@ -664,7 +722,7 @@ void setPID(int motion) {
   }
   else if (motion == 1) // turning
   {
-    Kp = 6.85; Ki = 0.0; Kd = 0.7;
+    Kp = 7.0; Ki = 0.0; Kd = 0.75;
     // int pot1_val = analogRead(pot1);
     // int pot2_val = analogRead(pot2);
     // int pot3_val = analogRead(pot3);
