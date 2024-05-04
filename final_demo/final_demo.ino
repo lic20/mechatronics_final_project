@@ -117,12 +117,12 @@ void loop() {
     result = move_goal(goalState);
   };
   track_puck();
-  shot(goalState);
+  shoot(goalState);
 
   delay(5000);
 }
 
-void shot(int goal_id) {
+void shoot(int goal_id) {
   if (goal_id == 0) {
     PID_move(0.0, 1);
     move_servo();
